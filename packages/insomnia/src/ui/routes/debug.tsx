@@ -21,6 +21,7 @@ import {
   LoaderFunction,
   redirect,
   useFetcher,
+  useLocation,
   useNavigate,
   useParams,
   useRouteLoaderData,
@@ -395,6 +396,7 @@ export const Debug: FC = () => {
 
   const setActiveEnvironmentFetcher = useFetcher();
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
 
   const sortOrder = searchParams.get('sortOrder') as SortOrder || 'type-manual';
   const { hotKeyRegistry } = settings;
@@ -858,8 +860,9 @@ export const Debug: FC = () => {
               onSelectionChange={keys => {
                 if (keys !== 'all') {
                   const value = keys.values().next().value;
+                  const params = new URLSearchParams(location.search);
                   navigate(
-                    `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}?${searchParams.toString()}`
+                    `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}?${params.toString()}`
                   );
                 }
               }}
@@ -930,8 +933,9 @@ export const Debug: FC = () => {
                     if (item && isRequestGroup(item.doc)) {
                       groupMetaPatcher(value, { collapsed: !item.collapsed });
                     } else {
+                      const params = new URLSearchParams(location.search);
                       navigate(
-                        `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}?${searchParams.toString()}`
+                        `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}?${params.toString()}`
                       );
                     }
                   }
