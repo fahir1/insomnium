@@ -861,9 +861,8 @@ export const Debug: FC = () => {
                 if (keys !== 'all') {
                   const value = keys.values().next().value;
                   const params = new URLSearchParams(location.search);
-                  navigate(
-                    `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}?${params.toString()}`
-                  );
+                  const search = params.toString();
+                  navigate(`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}${search ? `?${search}` : ''}`);
                 }
               }}
             >
@@ -934,9 +933,8 @@ export const Debug: FC = () => {
                       groupMetaPatcher(value, { collapsed: !item.collapsed });
                     } else {
                       const params = new URLSearchParams(location.search);
-                      navigate(
-                        `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}?${params.toString()}`
-                      );
+                      const search = params.toString();
+                      navigate(`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${value}${search ? `?${search}` : ''}`);
                     }
                   }
                 }}
