@@ -1,0 +1,134 @@
+name: Fork Release
+
+# Builds unsigned packages for macOS, Linux and Windows and publishes them as a
+# GitHub Release on this fork. Run it from the Actions tab, or push a `v*` tag.
+#
+# The upstream `release-*.yml` workflows are not used here: they expect Apple and
+# Windows code-signing secrets, a `release/**` branch flow and a changelog repo,
+# none of which exist on a personal fork.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create/publish, e.g. v0.2.4-filterfix.1"
+        required: true
+      prerelease:
+        description: "Mark the release as a pre-release"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            # dmg + zip, both universal (x64 + arm64)
+            targets: dmg,zip
+          - name: Linux
+            os: ubuntu-22.04
+            # rpm and snap are skipped: they need rpmbuild / snapcraft, which are
+            # not available on the runner. Building on 22.04 rather than 24.04
+            # keeps the AppImage usable on older glibc.
+            targets: AppImage,deb,tar.gz
+          - name: Windows
+            os: windows-latest
+            targets: squirrel,portable
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install packages
+        run: npm ci
+
+      - name: Package app
+        shell: bash
+        run: npm run app-package
+        env:
+          NODE_OPTIONS: "--max_old_space_size=6144"
+          BUILD_TARGETS: ${{ matrix.targets }}
+          # No certificates on a fork. Without this electron-builder searches the
+          # keychain, and on macOS it would then try to notarize an unsigned app.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            packages/insomnia/dist/*.dmg
+            packages/insomnia/dist/*.zip
+            packages/insomnia/dist/*.AppImage
+            packages/insomnia/dist/*.deb
+            packages/insomnia/dist/*.tar.gz
+            packages/insomnia/dist/*.exe
+            packages/insomnia/dist/squirrel-windows/*.exe
+            packages/insomnia/dist/squirrel-windows/*.nupkg
+
+  release:
+    name: Publish release
+    needs: build
+    # Publish whatever built, even if one platform failed, so a single broken
+    # target does not block the whole release.
+    if: always() && contains(needs.build.result, 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec mv -n {} release/ \;
+          ls -la release
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: ${{ inputs.tag || github.ref_name }}
+          prerelease: ${{ inputs.prerelease != false }}
+          fail_on_unmatched_files: true
+          files: release/*
+          body: |
+            Unsigned builds of this fork, including the sidebar filter fix (#3).
+
+            **These binaries are not code-signed or notarized.**
+
+            - macOS: right-click the app and choose *Open* the first time, or run
+              `xattr -dr com.apple.quarantine /Applications/Insomnium.app`
+            - Windows: SmartScreen will warn — *More info* → *Run anyway*
+            - Linux: `chmod +x` the AppImage before running it
+
+            | Platform | Files |
+            |---|---|
+            | macOS | `.dmg` (installer), `.zip` — universal, Intel + Apple Silicon |
+            | Linux | `.AppImage`, `.deb`, `.tar.gz` — x64 |
+            | Windows | `.exe` (Squirrel installer + portable) — x64 |
