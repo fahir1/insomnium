@@ -1,5 +1,5 @@
 import classnames from 'classnames';
-import React, { FC, Fragment, useEffect, useRef } from 'react';
+import React, { createContext, FC, Fragment, useContext, useEffect, useRef, useState } from 'react';
 import { ListDropTargetDelegate, ListKeyboardDelegate, mergeProps, OverlayContainer, useDraggableCollection, useDraggableItem, useDropIndicator, useDroppableCollection, useDroppableItem, useFocusRing, useListBox, useOption } from 'react-aria';
 import { useFetcher, useParams, useRouteLoaderData } from 'react-router-dom';
 import { DraggableCollectionState, DroppableCollectionState, Item, ListState, useDraggableCollectionState, useDroppableCollectionState, useListState } from 'react-stately';
@@ -21,6 +21,18 @@ import { Tooltip } from '../tooltip';
 
 const ROOT_ENVIRONMENT_NAME = 'Base Environment';
 
+/**
+ * Which environment the modal is currently editing. This is deliberately
+ * separate from the workspace's active environment: opening an environment here
+ * to look at it or change it should not switch the environment that requests
+ * are sent with.
+ *
+ * It travels by context because the sidebar rows are rendered from inside
+ * `ReorderableListBox`, which passes its items through react-stately and has no
+ * place to thread an extra prop through.
+ */
+const SelectedEnvironmentContext = createContext<string | null>(null);
+
 interface SidebarListItemProps {
   environment: Environment;
 }
@@ -28,14 +40,12 @@ interface SidebarListItemProps {
 const SidebarListItem: FC<SidebarListItemProps> = ({
   environment,
 }: SidebarListItemProps) => {
-  const {
-    activeWorkspaceMeta,
-  } = useRouteLoaderData(':workspaceId') as WorkspaceLoaderData;
+  const selectedEnvironmentId = useContext(SelectedEnvironmentContext);
   return (
     <div
       className={classnames({
         'env-modal__sidebar-item': true,
-        'env-modal__sidebar-item--active': activeWorkspaceMeta.activeEnvironmentId === environment._id,
+        'env-modal__sidebar-item--active': selectedEnvironmentId === environment._id,
       })}
     >
       {environment.color ? (
@@ -238,8 +248,8 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
   const createEnvironmentFetcher = useFetcher();
   const deleteEnvironmentFetcher = useFetcher();
   const updateEnvironmentFetcher = useFetcher();
-  const setActiveEnvironmentFetcher = useFetcher();
   const duplicateEnvironmentFetcher = useFetcher();
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string | null>(null);
   useEffect(() => {
     modalRef.current?.show();
   }, []);
@@ -250,22 +260,21 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
 
   const {
     baseEnvironment,
-    activeWorkspaceMeta,
     activeEnvironment,
     subEnvironments,
   } = routeData;
 
+  // The environment being edited. Defaults to whichever one is active, so the
+  // modal still opens on the environment the user was working with, but from
+  // then on it is purely a selection inside this modal.
+  const selectedEnvironment = [baseEnvironment, ...subEnvironments]
+    .find(environment => environment._id === selectedEnvironmentId) || activeEnvironment;
+
   function onSelectionChange(e: any) {
     const environmentId = e.anchorKey;
     // Only switch if valid
-    if (environmentEditorRef.current?.isValid() && activeWorkspaceMeta?.activeEnvironmentId !== environmentId) {
-      setActiveEnvironmentFetcher.submit({
-        environmentId,
-      },
-        {
-          method: 'post',
-          action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/set-active`,
-        });
+    if (environmentEditorRef.current?.isValid() && environmentId) {
+      setSelectedEnvironmentId(environmentId);
     }
   }
 
@@ -316,19 +325,13 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
           <div className="env-modal__sidebar">
             <div
               className={classnames('env-modal__sidebar-root-item', {
-                'env-modal__sidebar-item--active': activeEnvironment._id === baseEnvironment._id,
+                'env-modal__sidebar-item--active': selectedEnvironment._id === baseEnvironment._id,
               })}
             >
               <button
                 onClick={() => {
-                  if (environmentEditorRef.current?.isValid() && activeEnvironment._id !== baseEnvironment._id) {
-                    setActiveEnvironmentFetcher.submit({
-                      environmentId: baseEnvironment._id,
-                    },
-                      {
-                        method: 'post',
-                        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/set-active`,
-                      });
+                  if (environmentEditorRef.current?.isValid()) {
+                    setSelectedEnvironmentId(baseEnvironment._id);
                   }
                 }}
               >
@@ -386,47 +389,49 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
                 </DropdownItem>
               </Dropdown>
             </div>
-            <ReorderableListBox
-              items={subEnvironments}
-              onSelectionChange={onSelectionChange}
-              onReorder={onReorder}
-              selectionMode="multiple"
-              selectionBehavior="replace"
-              aria-label="list of subenvironments"
-            >
-              {(environment: any) =>
-                <Item key={environment._id}>
-                  {environment.name}
-                </Item>
-              }
-            </ReorderableListBox>
+            <SelectedEnvironmentContext.Provider value={selectedEnvironment._id}>
+              <ReorderableListBox
+                items={subEnvironments}
+                onSelectionChange={onSelectionChange}
+                onReorder={onReorder}
+                selectionMode="multiple"
+                selectionBehavior="replace"
+                aria-label="list of subenvironments"
+              >
+                {(environment: any) =>
+                  <Item key={environment._id}>
+                    {environment.name}
+                  </Item>
+                }
+              </ReorderableListBox>
+            </SelectedEnvironmentContext.Provider>
           </div>
           <div className="env-modal__main">
             <div className="env-modal__main__header">
               <h1>
-                {baseEnvironment._id === activeEnvironment._id ? (
+                {baseEnvironment._id === selectedEnvironment._id ? (
                   ROOT_ENVIRONMENT_NAME
                 ) : (
                   <Editable
                     singleClick
                     className="wide"
                     onSubmit={name => {
-                      if (activeEnvironment._id && name) {
-                        updateEnvironment(activeEnvironment._id, { name });
+                      if (selectedEnvironment._id && name) {
+                        updateEnvironment(selectedEnvironment._id, { name });
                       }
                     }}
-                    value={activeEnvironment.name}
+                    value={selectedEnvironment.name}
                   />
                 )}
               </h1>
 
-              {baseEnvironment._id !== activeEnvironment._id ? (
+              {baseEnvironment._id !== selectedEnvironment._id ? (
                 <Fragment>
                   <input
                     className="hidden"
                     type="color"
                     ref={inputRef}
-                    onChange={event => updateEnvironment(activeEnvironment._id, { color: event.target.value })}
+                    onChange={event => updateEnvironment(selectedEnvironment._id, { color: event.target.value })}
                   />
 
                   <Dropdown
@@ -437,11 +442,11 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
                         className="btn btn--clicky"
                         disableHoverBehavior={false}
                       >
-                        {activeEnvironment.color && (
+                        {selectedEnvironment.color && (
                           <i
                             className="fa fa-circle space-right"
                             style={{
-                              color: activeEnvironment.color,
+                              color: selectedEnvironment.color,
                             }}
                           />
                         )}
@@ -449,18 +454,18 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
                       </DropdownButton>
                     }
                   >
-                    <DropdownItem aria-label={activeEnvironment.color ? 'Change Color' : 'Assign Color'}>
+                    <DropdownItem aria-label={selectedEnvironment.color ? 'Change Color' : 'Assign Color'}>
                       <ItemContent
                         icon="circle"
-                        label={activeEnvironment.color ? 'Change Color' : 'Assign Color'}
+                        label={selectedEnvironment.color ? 'Change Color' : 'Assign Color'}
                         iconStyle={{
-                          ...(activeEnvironment.color ? { color: activeEnvironment.color } : {}),
+                          ...(selectedEnvironment.color ? { color: selectedEnvironment.color } : {}),
                         }}
                         onClick={() => {
-                          if (!activeEnvironment.color) {
+                          if (!selectedEnvironment.color) {
                             // TODO: fix magic-number. Currently this is the `surprise` background color for the default theme,
                             // but we should be grabbing the actual value from the user's actual theme instead.
-                            updateEnvironment(activeEnvironment._id, { color: '#7d69cb' });
+                            updateEnvironment(selectedEnvironment._id, { color: '#7d69cb' });
                           }
                           inputRef.current?.click();
                         }}
@@ -469,19 +474,19 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
 
                     <DropdownItem aria-label='Unset Color'>
                       <ItemContent
-                        isDisabled={!activeEnvironment.color}
+                        isDisabled={!selectedEnvironment.color}
                         icon="minus-circle"
                         label="Unset Color"
-                        onClick={() => updateEnvironment(activeEnvironment._id, { color: null })}
+                        onClick={() => updateEnvironment(selectedEnvironment._id, { color: null })}
                       />
                     </DropdownItem>
                   </Dropdown>
 
                   <button
                     onClick={async () => {
-                      if (activeEnvironment) {
+                      if (selectedEnvironment) {
                         duplicateEnvironmentFetcher.submit({
-                          environmentId: activeEnvironment._id,
+                          environmentId: selectedEnvironment._id,
                         }, {
                           method: 'post',
                           action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/duplicate`,
@@ -493,8 +498,8 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
                     <i className="fa fa-copy" /> Duplicate
                   </button>
 
-                  {activeEnvironment._id !== baseEnvironment._id && <PromptButton
-                    onClick={() => handleDeleteEnvironment(activeEnvironment._id)}
+                  {selectedEnvironment._id !== baseEnvironment._id && <PromptButton
+                    onClick={() => handleDeleteEnvironment(selectedEnvironment._id)}
                     className="btn btn--clicky"
                   >
                     <i className="fa fa-trash-o" />
@@ -505,10 +510,10 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
             <div className="env-modal__editor">
               <EnvironmentEditor
                 ref={environmentEditorRef}
-                key={`${activeEnvironment._id}`}
+                key={`${selectedEnvironment._id}`}
                 environmentInfo={{
-                  object: activeEnvironment.data,
-                  propertyOrder: activeEnvironment.dataPropertyOrder,
+                  object: selectedEnvironment.data,
+                  propertyOrder: selectedEnvironment.dataPropertyOrder,
                 }}
                 onBlur={() => {
                   // Only save if it's valid
@@ -516,8 +521,8 @@ export const WorkspaceEnvironmentsEditModal = (props: ModalProps) => {
                     return;
                   }
                   const data = environmentEditorRef.current?.getValue();
-                  if (activeEnvironment && data) {
-                    updateEnvironment(activeEnvironment._id, {
+                  if (selectedEnvironment && data) {
+                    updateEnvironment(selectedEnvironment._id, {
                       data: data.object,
                       dataPropertyOrder: data.propertyOrder,
                     });

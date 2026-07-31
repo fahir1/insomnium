@@ -10,13 +10,13 @@ import type { Request } from '../../models/request';
 import type { Response } from '../../models/response';
 import { guard } from '../../utils/guard';
 import { setDefaultProtocol } from '../../utils/url/protocol';
-import { getBasicAuthHeader } from '../basic-auth/get-header';
 import { fetchRequestData, responseTransform, sendCurlAndWriteTimeline, tryToInterpolateRequest, tryToTransformRequestWithPlugins } from '../network';
 import {
   AuthKeys,
   GRANT_TYPE_AUTHORIZATION_CODE,
   PKCE_CHALLENGE_S256,
 } from './constants';
+import { getOAuth2BasicAuthHeader } from './get-basic-auth-header';
 
 const LOCALSTORAGE_KEY_SESSION_ID = 'insomnia::current-oauth-session-id';
 
@@ -93,7 +93,14 @@ export const getOAuth2Token = async (
     guard(authentication.authorizationUrl, 'Invalid authorization URL');
 
     const codeVerifier = authentication.usePkce ? encodePKCE(crypto.randomBytes(32)) : '';
-    const usePkceAnd256 = authentication.usePkce && authentication.pkceMethod === PKCE_CHALLENGE_S256;
+    // `pkceMethod` stays undefined until the user actually touches the dropdown,
+    // but the dropdown renders SHA-256 as its default. Reading it raw meant a
+    // freshly enabled PKCE flow silently fell back to a plain challenge and sent
+    // no `code_challenge_method` at all. Treat unset as SHA-256 so the request
+    // matches what the UI shows - and because RFC 7636 section 4.2 requires S256
+    // of any client that can compute it.
+    const pkceMethod = authentication.pkceMethod || PKCE_CHALLENGE_S256;
+    const usePkceAnd256 = authentication.usePkce && pkceMethod === PKCE_CHALLENGE_S256;
     const codeChallenge = usePkceAnd256 ? encodePKCE(crypto.createHash('sha256').update(codeVerifier).digest()) : codeVerifier;
     const authCodeUrl = new URL(authentication.authorizationUrl);
     const responseType: OAuth2ResponseType = 'code';
@@ -107,7 +114,7 @@ export const getOAuth2Token = async (
       ...insertAuthKeyIf('resource', authentication.resource),
       ...(codeChallenge ? [
         { name: 'code_challenge', value: codeChallenge },
-        { name: 'code_challenge_method', value: authentication.pkceMethod },
+        { name: 'code_challenge_method', value: pkceMethod },
       ] : []),
     ].forEach(p => p.value && authCodeUrl.searchParams.append(p.name, p.value));
     const redirectedTo = await window.main.authorizeUserInWindow({
@@ -159,7 +166,7 @@ export const getOAuth2Token = async (
       ...insertAuthKeyIf('client_secret', authentication.clientSecret),
     ];
   } else {
-    headers.push(getBasicAuthHeader(authentication.clientId, authentication.clientSecret));
+    headers.push(getOAuth2BasicAuthHeader(authentication.clientId, authentication.clientSecret));
   }
 
   const response = await sendAccessTokenRequest(requestId, authentication, params, headers);
@@ -203,9 +210,11 @@ async function getExistingAccessTokenAndRefreshIfExpired(
       ...insertAuthKeyIf('client_secret', authentication.clientSecret),
     ];
   } else {
-    headers.push(getBasicAuthHeader(authentication.clientId, authentication.clientSecret));
+    headers.push(getOAuth2BasicAuthHeader(authentication.clientId, authentication.clientSecret));
   }
-  const response = await sendAccessTokenRequest(requestId, authentication, params, []);
+  // `headers` was built and then thrown away here, so a refresh that sends its
+  // credentials as a Basic header - the default - went out unauthenticated.
+  const response = await sendAccessTokenRequest(requestId, authentication, params, headers);
 
   const statusCode = response.statusCode || 0;
   const bodyBuffer = models.response.getBodyBuffer(response);
