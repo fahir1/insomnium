@@ -94,8 +94,12 @@ const Root = () => {
   useEffect(() => {
       navigate({
         pathname: location.pathname,
+        // Keep the current query string (sidebar `filter`, `sortOrder`, ...) —
+        // omitting it here resets it on every pathname change.
+        search: location.search,
         hash: 'revalidate=true',
       });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, navigate]);
 
   useEffect(() => {
