@@ -3,12 +3,15 @@ import React, { Fragment, useRef, useState } from 'react';
 import { Button, Item, Menu, MenuTrigger, Popover } from 'react-aria-components';
 import { useFetcher, useParams, useRouteLoaderData } from 'react-router-dom';
 
+import { database as db } from '../../../common/database';
 import { toKebabCase } from '../../../common/misc';
 import { RENDER_PURPOSE_NO_RENDER } from '../../../common/render';
 import { PlatformKeyCombinations } from '../../../common/settings';
 import * as models from '../../../models';
-import { Request } from '../../../models/request';
-import type { RequestGroup } from '../../../models/request-group';
+import { isGrpcRequest } from '../../../models/grpc-request';
+import { isRequest, Request } from '../../../models/request';
+import { isRequestGroup, type RequestGroup } from '../../../models/request-group';
+import { isWebSocketRequest } from '../../../models/websocket-request';
 import type { RequestGroupAction } from '../../../plugins';
 import { getRequestGroupActions } from '../../../plugins';
 import * as pluginContexts from '../../../plugins/context/index';
@@ -17,7 +20,7 @@ import { RootLoaderData } from '../../routes/root';
 import { WorkspaceLoaderData } from '../../routes/workspace';
 import { type DropdownHandle, type DropdownProps } from '../base/dropdown';
 import { Icon } from '../icon';
-import { showError, showModal, showPrompt } from '../modals';
+import { showAlert, showError, showModal, showPrompt } from '../modals';
 import { EnvironmentEditModal } from '../modals/environment-edit-modal';
 import { PasteCurlModal } from '../modals/paste-curl-modal';
 import { RequestGroupSettingsModal } from '../modals/request-group-settings-modal';
@@ -86,12 +89,37 @@ export const RequestGroupActionsDropdown = ({
   };
 
   const handleDeleteFolder = async () => {
-    models.stats.incrementDeletedRequestsForDescendents(requestGroup);
-    requestFetcher.submit({ id: requestGroup._id },
-      {
-        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request-group/delete`,
-        method: 'post',
-      });
+    // Deleting a folder cascades to everything inside it, so say what is about
+    // to go before doing it.
+    const descendants = await db.withDescendants(requestGroup);
+    const requestCount = descendants.filter(
+      doc => isRequest(doc) || isGrpcRequest(doc) || isWebSocketRequest(doc),
+    ).length;
+    const folderCount = descendants.filter(
+      doc => isRequestGroup(doc) && doc._id !== requestGroup._id,
+    ).length;
+
+    const contents = [
+      requestCount > 0 ? `${requestCount} request${requestCount === 1 ? '' : 's'}` : '',
+      folderCount > 0 ? `${folderCount} folder${folderCount === 1 ? '' : 's'}` : '',
+    ].filter(Boolean).join(' and ');
+
+    showAlert({
+      title: `Delete ${requestGroup.name}`,
+      message: contents
+        ? <span>Really delete <strong>{requestGroup.name}</strong> and the {contents} inside it? This cannot be undone.</span>
+        : <span>Really delete <strong>{requestGroup.name}</strong>?</span>,
+      addCancel: true,
+      okLabel: 'Delete',
+      onConfirm: async () => {
+        models.stats.incrementDeletedRequestsForDescendents(requestGroup);
+        requestFetcher.submit({ id: requestGroup._id },
+          {
+            action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request-group/delete`,
+            method: 'post',
+          });
+      },
+    });
   };
 
   const handlePluginClick = async ({ label, plugin, action }: RequestGroupAction) => {
